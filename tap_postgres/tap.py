@@ -577,9 +577,14 @@ class TapPostgres(SQLTap):
         new_catalog: Catalog = Catalog()
         modified_streams: list = []
         for stream in super().catalog.streams:
+            # Optimize: Skip expensive deepcopy for non-LOG_BASED streams
+            if stream.replication_method != "LOG_BASED":
+                new_catalog.add_stream(stream)
+                continue
+            
             stream_modified = False
             new_stream = copy.deepcopy(stream)
-            if new_stream.replication_method == "LOG_BASED" and new_stream.schema.properties:
+            if new_stream.schema.properties:
                 for property in new_stream.schema.properties.values():
                     if "null" not in property.type:
                         if isinstance(property.type, list):

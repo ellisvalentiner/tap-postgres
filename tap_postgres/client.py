@@ -220,7 +220,9 @@ class PostgresStream(SQLStream):
         query = super().apply_query_filters(query, table, context=context)
         stream_options = self.config.get("stream_options", {}).get(self.name, {})
         if clauses := stream_options.get("custom_where_clauses"):
-            query = query.where(*(sa.text(clause.strip()) for clause in clauses))
+            # Optimize: Use list comprehension instead of generator for better performance
+            stripped_clauses = [sa.text(clause.strip()) for clause in clauses]
+            query = query.where(*stripped_clauses)
         return query
 
 
@@ -234,6 +236,15 @@ class PostgresLogBasedStream(SQLStream):
 
     replication_key = "_sdc_lsn"
 
+    # WAL action type constants (class-level for performance)
+    _UPSERT_ACTIONS = frozenset({"I", "U"})
+    _DELETE_ACTIONS = frozenset({"D"})
+    _TRUNCATE_ACTIONS = frozenset({"T"})
+    _TRANSACTION_ACTIONS = frozenset({"B", "C"})
+    
+    # Timestamp format for delete operations
+    _TIMESTAMP_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
+
     @property
     def config(self) -> Mapping[str, t.Any]:
         """Return a read-only config dictionary."""
@@ -244,11 +255,16 @@ class PostgresLogBasedStream(SQLStream):
         """Override schema for log-based replication adding _sdc columns."""
         schema_dict = super().effective_schema
 
+        # Optimize: Check for existing null and avoid redundant operations
         for property in schema_dict["properties"].values():
-            if isinstance(property["type"], list):
-                property["type"].append("null")
+            prop_type = property["type"]
+            if isinstance(prop_type, list):
+                if "null" not in prop_type:
+                    prop_type.append("null")
             else:
-                property["type"] = [property["type"], "null"]
+                # Only create new list if null not already present
+                if prop_type != "null":
+                    property["type"] = [prop_type, "null"]
 
         if "required" in schema_dict:
             schema_dict.pop("required")
@@ -362,26 +378,27 @@ class PostgresLogBasedStream(SQLStream):
             )
             return {}
 
-        row = {}
-
-        upsert_actions = {"I", "U"}
-        delete_actions = {"D"}
-        truncate_actions = {"T"}
-        transaction_actions = {"B", "C"}
-
-        if message_payload["action"] in upsert_actions:
-            for column in message_payload["columns"]:
-                row.update({column["name"]: self._parse_column_value(column, cursor)})
-            row.update({"_sdc_deleted_at": None})
-            row.update({"_sdc_lsn": message.data_start})
-        elif message_payload["action"] in delete_actions:
-            for column in message_payload["identity"]:
-                row.update({column["name"]: self._parse_column_value(column, cursor)})
-            row.update(
-                {"_sdc_deleted_at": datetime.datetime.utcnow().strftime(r"%Y-%m-%dT%H:%M:%SZ")}
+        action = message_payload["action"]
+        
+        # Optimize: Build dict in single comprehension instead of multiple updates
+        if action in self._UPSERT_ACTIONS:
+            row = {
+                column["name"]: self._parse_column_value(column, cursor)
+                for column in message_payload["columns"]
+            }
+            row["_sdc_deleted_at"] = None
+            row["_sdc_lsn"] = message.data_start
+        elif action in self._DELETE_ACTIONS:
+            row = {
+                column["name"]: self._parse_column_value(column, cursor)
+                for column in message_payload["identity"]
+            }
+            # Optimize: Use timezone-aware datetime and cached format string
+            row["_sdc_deleted_at"] = datetime.datetime.now(datetime.timezone.utc).strftime(
+                self._TIMESTAMP_FORMAT
             )
-            row.update({"_sdc_lsn": message.data_start})
-        elif message_payload["action"] in truncate_actions:
+            row["_sdc_lsn"] = message.data_start
+        elif action in self._TRUNCATE_ACTIONS:
             self.logger.debug(
                 (
                     "A message payload of %s (corresponding to a truncate action) "
@@ -389,7 +406,8 @@ class PostgresLogBasedStream(SQLStream):
                 ),
                 message.payload,
             )
-        elif message_payload["action"] in transaction_actions:
+            return None
+        elif action in self._TRANSACTION_ACTIONS:
             self.logger.debug(
                 (
                     "A message payload of %s (corresponding to a transaction beginning "
@@ -397,6 +415,7 @@ class PostgresLogBasedStream(SQLStream):
                 ),
                 message.payload,
             )
+            return None
         else:
             raise RuntimeError(
                 (
