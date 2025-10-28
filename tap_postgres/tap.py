@@ -51,10 +51,10 @@ def _excepthook_with_full_traceback(exc_type, exc_value, exc_tb):
     # Get the full traceback as a string
     tb_lines = traceback.format_exception(exc_type, exc_value, exc_tb)
     full_traceback = "".join(tb_lines)
-    
+
     # Log the error with full traceback using logging module
     logging.error(f"\nFull traceback:\n{full_traceback}")
-    
+
     # Call the original excepthook as well
     _original_excepthook(exc_type, exc_value, exc_tb)
 
