@@ -581,7 +581,7 @@ class TapPostgres(SQLTap):
             if stream.replication_method != "LOG_BASED":
                 new_catalog.add_stream(stream)
                 continue
-            
+
             stream_modified = False
             new_stream = copy.deepcopy(stream)
             if new_stream.schema.properties:

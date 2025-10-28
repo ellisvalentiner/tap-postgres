@@ -241,7 +241,6 @@ class PostgresLogBasedStream(SQLStream):
     _DELETE_ACTIONS = frozenset({"D"})
     _TRUNCATE_ACTIONS = frozenset({"T"})
     _TRANSACTION_ACTIONS = frozenset({"B", "C"})
-    
     # Timestamp format for delete operations
     _TIMESTAMP_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
 
@@ -261,10 +260,9 @@ class PostgresLogBasedStream(SQLStream):
             if isinstance(prop_type, list):
                 if "null" not in prop_type:
                     prop_type.append("null")
-            else:
-                # Only create new list if null not already present
-                if prop_type != "null":
-                    property["type"] = [prop_type, "null"]
+            # Only create new list if null not already present
+            elif prop_type != "null":
+                property["type"] = [prop_type, "null"]
 
         if "required" in schema_dict:
             schema_dict.pop("required")
@@ -379,7 +377,7 @@ class PostgresLogBasedStream(SQLStream):
             return {}
 
         action = message_payload["action"]
-        
+
         # Optimize: Build dict in single comprehension instead of multiple updates
         if action in self._UPSERT_ACTIONS:
             row = {
