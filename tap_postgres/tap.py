@@ -5,8 +5,10 @@ from __future__ import annotations
 import atexit
 import copy
 import io
+import logging
 import signal
 import sys
+import traceback
 from functools import cached_property
 from os import chmod, path
 from typing import TYPE_CHECKING, Any, cast
@@ -39,6 +41,26 @@ except ImportError:
 
 
 REPLICATION_SLOT_PATTERN = "^(?!pg_)[A-Za-z0-9_]{1,63}$"
+
+# Capture full exception tracebacks in a single log message
+_original_excepthook = sys.excepthook
+
+
+def _excepthook_with_full_traceback(exc_type, exc_value, exc_tb):
+    """Exception hook that logs full traceback as a single message."""
+    # Get the full traceback as a string
+    tb_lines = traceback.format_exception(exc_type, exc_value, exc_tb)
+    full_traceback = "".join(tb_lines)
+    
+    # Log the error with full traceback using logging module
+    logging.error(f"\nFull traceback:\n{full_traceback}")
+    
+    # Call the original excepthook as well
+    _original_excepthook(exc_type, exc_value, exc_tb)
+
+
+# Install the exception hook
+sys.excepthook = _excepthook_with_full_traceback
 
 
 class TapPostgres(SQLTap):
